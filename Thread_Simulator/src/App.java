@@ -16,12 +16,13 @@ class Fork {
         return id;
     }
     
-    public int getProcessTime() {
+    public synchronized int getProcessTime() {
         return processTime;
     }
 
-    public int setProcessTime(ProcessThread process) {
+    public synchronized int setProcessTime(ProcessThread process) {
         this.processTime -= process.burstTime;
+        if (processTime < 0) processTime = 0;
         return processTime;
     }
 
@@ -44,34 +45,42 @@ class ProcessThread extends Thread {
         this.burstTime = burstTime;
         this.forks = forks;
     }
-
+    /*
+    * Each thread tries to acquire two forks (semaphores) in a circular manner. 
+    * If it successfully acquires both, it simulates eating by sleeping for the burst time, then releases the forks.
+    * If it fails to acquire the second fork, it releases the first one and tries again with the next pair of forks.
+    * This process continues until the thread has successfully eaten or all forks have been tried.
+    */
     @Override
     public void run() {
-        for (int i = 0; i < forks.size(); i++) {
-            Fork fork = forks.get(i);
-            Fork nextFork = forks.get((i + 1) % forks.size());
+        boolean ateLast = true;
+        while (ateLast) {
+            ateLast = false;
+            for (int i = 0; i < forks.size(); i++) {
+                Fork fork = forks.get(i);
+                Fork nextFork = forks.get((i + 1) % forks.size());
 
-            if (fork.getProcessTime() <= 0) continue; // skip exhausted forks
+                if (fork.getProcessTime() <= 0 && nextFork.getProcessTime() <= 0) continue;
 
-            System.out.println("[Thread " + id + "] Waiting for forks " + fork.getId() + " and " + nextFork.getId());
-
-            if (fork.semaphore.tryAcquire()) {
-                if (nextFork.semaphore.tryAcquire()) {
-                    System.out.println("[Thread " + id + "] Picked up fork " + fork.getId() + " and " + nextFork.getId());
-                    System.out.println("[Thread " + id + "] Eating...");
-                    try {
-                        Thread.sleep(1000L * burstTime);
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
+                if (fork.semaphore.tryAcquire()) {
+                    if (nextFork.semaphore.tryAcquire()) {
+                        System.out.println("[Thread " + id + "] Picked up fork " + fork.getId() + " and " + nextFork.getId());
+                        System.out.println("[Thread " + id + "] Eating...");
+                        try {
+                            Thread.sleep(1000L * burstTime);
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        }
+                        fork.setProcessTime(this);
+                        nextFork.setProcessTime(this);
+                        fork.putDown();
+                        nextFork.putDown();
+                        System.out.println("[Thread " + id + "] Released forks");
+                        ateLast = true; // ate this round, keep going
+                        break;
+                    } else {
+                        fork.putDown();
                     }
-                    fork.setProcessTime(this);
-                    nextFork.setProcessTime(this);
-                    fork.putDown();
-                    nextFork.putDown();
-                    System.out.println("[Thread " + id + "] Released forks");
-                    break;
-                } else {
-                    fork.putDown(); // couldn't get both, release first
                 }
             }
         }
@@ -105,6 +114,10 @@ public class App {
         }
         for (ProcessThread thread : threads){
             thread.join();
+        }
+
+        for (Fork fork : forks) {
+            System.out.println("Fork " + fork.getId() + " remaining process time: " + fork.getProcessTime());
         }
     }
 }
